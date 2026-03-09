@@ -1,1 +1,9 @@
+# Python
+__pycache__/
+*.pyc
+
+# Environment
 .env
+
+# Chroma local database
+shared_starter_code/chroma_db/
