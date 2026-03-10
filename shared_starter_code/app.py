@@ -102,6 +102,10 @@ def ask_question(q: Question):
         prompt = f"""
 You are an assistant for Addis Ababa University.
 Answer the question ONLY using the provided context.
+make you answer in bullet forms
+add short summary of you answer
+you must check first that the question is in the provided documents before giving any answer
+i strictly want u to follow the rules above 
 
 If the answer is not in the context:
 say "I could not find the answer in the provided documents."
