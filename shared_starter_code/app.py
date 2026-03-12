@@ -3,39 +3,40 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+# LangChain & Vector DB Imports
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_groq import ChatGroq
 
-# # 1. Add this import at the top
-# from fastapi.middleware.cors import CORSMiddleware
-
 load_dotenv()
-
 app = FastAPI()
 
-
-# # ... after your app = FastAPI() line ...
-
-# # 2. Add these lines to allow the UI to connect
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["*"],
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
-# ---------- Vector Database Setup ----------
+# ---------------------------------------------------------
+# 1. SETUP & CONFIGURATION
+# ---------------------------------------------------------
+# Define the embedding model (converts text to numerical vectors)
 embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2")
 vectorstore = None
 
+# Global list to store conversation context (Memory Bonus)
+chat_history = []
+
+# Failure message for strict adherence to documents
+NOT_FOUND_MSG = "I could not find the answer in the provided documents."
+
+# ---------------------------------------------------------
+# 2. INGEST MULTIPLE DOCUMENTS (PDF/TXT)
+# ---------------------------------------------------------
+# This section targets specific AAU document types:
+# Student manuals, course guides, policies, announcements, etc.
+
 
 def load_and_process_docs():
     docs = []
-    folder = "../docs"
+    folder = "../docs"  # Folder containing your AAU PDF/TXT files
 
     if not os.path.exists(folder):
         print(f"⚠️ Warning: Folder '{folder}' not found.")
@@ -45,42 +46,48 @@ def load_and_process_docs():
         path = os.path.join(folder, file)
         try:
             if file.endswith(".pdf"):
+                # Loads AAU Student Manuals / Research Guidelines
                 loader = PyPDFLoader(path)
                 docs.extend(loader.load())
             elif file.endswith(".txt"):
+                # Loads University Announcements / Policy updates
                 loader = TextLoader(path)
                 docs.extend(loader.load())
         except Exception as e:
             print(f"❌ Failed to load {file}: {e}")
     return docs
 
+# ---------------------------------------------------------
+# 3. SPLIT TEXT & STORE IN VECTOR DATABASE (CHROMA)
+# ---------------------------------------------------------
+
 
 @app.on_event("startup")
 def startup_event():
     global vectorstore
-    print("🔄 Initializing Vector Store...")
-    documents = load_and_process_docs()
 
-    if documents:
+    # Trigger Ingestion
+    raw_documents = load_and_process_docs()
+
+    if raw_documents:
+        # Split text into manageable chunks for accurate retrieval
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=700,
-            chunk_overlap=100)
-        chunks = splitter.split_documents(documents)
+            chunk_overlap=100
+        )
+        chunks = splitter.split_documents(raw_documents)
+
+        # Generate embeddings and store them in Chroma DB
         vectorstore = Chroma.from_documents(
             documents=chunks,
             embedding=embeddings,
             persist_directory="./chroma_db"
         )
-        print("✅ Vector store initialized successfully.")
-    else:
-        print("⚠️ No documents found. Ensure your 'docs' folder has files.")
+        print("✅ Vector database initialized with AAU documents.")
 
-
-# ---------- Updated LLM ----------
-llm = ChatGroq(
-    model_name="llama-3.1-8b-instant",  # <--- Fixed Model Name
-    temperature=0
-)
+# ---------------------------------------------------------
+# 4. RETRIEVE RELEVANT CHUNKS & GENERATE ANSWERS
+# ---------------------------------------------------------
 
 
 class Question(BaseModel):
@@ -89,37 +96,73 @@ class Question(BaseModel):
 
 @app.post("/ask")
 def ask_question(q: Question):
+    global chat_history
     if vectorstore is None:
         raise HTTPException(
             status_code=503, detail="Vector store not initialized.")
 
     try:
+        # A. Retrieve relevant chunks based on user query (Search top 3)
         retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-        docs = retriever.invoke(q.question)  # <--- Fixed invoke method
+        docs = retriever.invoke(q.question)
 
-        context = "\n\n".join([doc.page_content for doc in docs])
+        # B. Prepare highlights and source references
+        highlights = [
+            {
+                "source": os.path.basename(d.metadata.get("source", "AAU Doc")),
+                "content": d.page_content[:200] + "..."  # Chunk Summarization
+            }
+            for d in docs
+        ]
 
+        context_text = "\n\n".join([doc.page_content for doc in docs])
+
+        # C. Format conversation memory for the prompt
+        history_text = "\n".join(
+            [f"User: {m['q']}\nAI: {m['a']}" for m in chat_history[-3:]])
+
+        # D. Strict Prompting: Answer using ONLY retrieved content
         prompt = f"""
-You are an assistant for Addis Ababa University.
-Answer the question ONLY using the provided context.
-make you answer in bullet forms
-add short summary of you answer
-you must check first that the question is in the provided documents before giving any answer
-i strictly want u to follow the rules above 
+You are the Addis Ababa University (AAU) General Assistant.
+Your ONLY source of truth is the 'Context' provided below.
 
-If the answer is not in the context:
-say "I could not find the answer in the provided documents."
+Rules:
+1. If the answer is NOT in the context, say: "{NOT_FOUND_MSG}"
+2. Do NOT use outside knowledge.
+3. Use bullet points for the main answer.
+4. Provide a very brief summary at the end.
 
-Context:
-{context}
+Previous Conversation:
+{history_text}
 
-Question:
-{q.question}"""
+Context from AAU Documents:
+{context_text}
 
+Question: {q.question}
+Answer:"""
+
+        llm = ChatGroq(model_name="llama-3.1-8b-instant", temperature=0)
         response = llm.invoke(prompt)
-        sources = list(
-            set([os.path.basename(doc.metadata.get("source", "unknown")) for doc in docs]))
 
-        return {"answer": response.content, "sources": sources}
+        # E. Update Memory
+        chat_history.append({"q": q.question, "a": response.content})
+
+        # Return answer with source references
+        return {
+            "answer": response.content,
+            "sources": list(set([h["source"] for h in highlights])),
+            "highlights": highlights
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ---------------------------------------------------------
+# 5. OPTIONAL: UTILITY ENDPOINTS
+# ---------------------------------------------------------
+
+
+@app.post("/clear")
+def clear_memory():
+    global chat_history
+    chat_history = []
+    return {"status": "Memory cleared"}
