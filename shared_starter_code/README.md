@@ -3,8 +3,7 @@ title: AAU RAG Assistant
 emoji: 🎓
 colorFrom: purple
 colorTo: indigo
-sdk: streamlit
-sdk_version: "1.32.0"
-app_file: start.py
+sdk: docker
+app_port: 7860
 pinned: false
 ---
