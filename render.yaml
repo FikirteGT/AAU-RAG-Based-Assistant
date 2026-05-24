@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: aau-backend
+    runtime: python
+    rootDir: shared_starter_code
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+
+  - type: web
+    name: aau-frontend
+    runtime: python
+    rootDir: shared_starter_code
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run chat.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: BACKEND_URL
+        sync: false

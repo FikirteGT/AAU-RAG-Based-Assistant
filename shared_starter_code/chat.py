@@ -1,5 +1,8 @@
+import os
 import streamlit as st
 import requests
+
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 st.set_page_config(page_title="AAU Assistant", page_icon="🎓")
 
@@ -8,14 +11,6 @@ st.markdown("""
 <style>
 html { scroll-behavior: smooth; }
 .stApp { background-color: #2B0D3F; color: white; }
-.highlight-card {
-    background-color: #1A0726;
-    border-radius: 10px;
-    padding: 15px;
-    margin-bottom: 10px;
-    border-left: 5px solid #007bff;
-    color: #E0E0E0;
-}
 /* Fixed Navigation Style */
 .nav-buttons {
     position: fixed;
@@ -46,7 +41,7 @@ with st.sidebar:
 
     st.write("---")
     if st.button("🗑️ Clear Conversation"):
-        requests.post("http://localhost:8000/clear")
+        requests.post(f"{BACKEND_URL}/clear")
         st.session_state.messages = []
         st.rerun()
 
@@ -55,26 +50,13 @@ st.title("🎓 AAU General Assistant")
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-NOT_FOUND_MSG = "I could not find the answer in the provided documents."
-
 # 2. CHAT DISPLAY
 # (Normal order so scrolling to 'Bottom' feels natural for the newest message)
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-        if (message["role"] == "assistant" and
-            "highlights" in message and
-                NOT_FOUND_MSG not in message["content"]):
 
-            with st.expander("🔍 Retrieved Document Snippets"):
-                for h in message["highlights"]:
-                    st.markdown(f"""
-                    <div class="highlight-card">
-                    <b>📄 Source: {h['source']}</b><br>
-                    <i>{h['content']}</i>
-                    </div>
-                    """, unsafe_allow_html=True)
 
 # ⚓ BOTTOM ANCHOR
 st.markdown("<div id='bottom'></div>", unsafe_allow_html=True)
@@ -85,7 +67,7 @@ if prompt := st.chat_input("How can I help you today?"):
 
     try:
         response = requests.post(
-            "http://localhost:8000/ask",
+            f"{BACKEND_URL}/ask",
             json={"question": prompt},
             timeout=30
         )
